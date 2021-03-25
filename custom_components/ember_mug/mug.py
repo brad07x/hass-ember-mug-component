@@ -41,19 +41,6 @@ from .const import (
 )
 
 
-def decode_byte_string(data: Union[bytes, bytearray]) -> str:
-    """Convert bytes to text as Ember expects."""
-    return re.sub("(\\r|\\n)", "", base64.encodebytes(data + b"===").decode("utf8"))
-
-
-def bytes_to_little_int(data: bytearray) -> int:
-    """Convert bytes to little int."""
-    return int.from_bytes(data, byteorder="little", signed=False)
-
-
-def bytes_to_big_int(data: bytearray) -> int:
-    """Convert bytes to big int."""
-    return int.from_bytes(data, "big")
 
 
 class EmberMug:
@@ -364,3 +351,23 @@ class EmberMug:
         with contextlib.suppress(BleakError):
             if self.client and self.client.is_connected:
                 await self.client.disconnect()
+
+
+"""
+param1RequestFacade.addHeader("x-access-token", ApiFactory.this.mAuthorizationDataStore.getToken()); 
+deviceId  (fa95ffcacea9a5cd4f80404628685d40) md5(16digits)
+mugId ()
+dsk 
+password (password)
+identity (email)
+
+signIn(String email, String password) 
+Authenticate(
+    AuthApi.CredentialsRequest(email, this.mEncryptedDeviceId, this.mMugService.getId(), dsk, password)
+)
+
+resp:
+public final String accessToken;
+public int code;
+public final String udsk;
+"""
