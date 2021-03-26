@@ -5,7 +5,6 @@ Most of these are UUIDs.
 Since these are not public some were found on this repo https://github.com/orlopau/ember-mug/ (Thank you!)
 Some found from testing and from the App.
 """
-from uuid import UUID
 
 DOMAIN = "ember_mug"
 

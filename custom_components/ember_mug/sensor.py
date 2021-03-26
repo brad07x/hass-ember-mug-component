@@ -1,17 +1,17 @@
 """Sensor Entity for Ember Mug."""
 from __future__ import annotations
 
+import time
 from typing import Callable, Dict, Optional, Union
 
+from bluepy.btle import BTLEDisconnectError
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.const import (
-    ATTR_BATTERY_LEVEL,
     CONF_MAC,
     CONF_NAME,
     CONF_TEMPERATURE_UNIT,
     DEVICE_CLASS_TEMPERATURE,
     TEMP_CELSIUS,
-    TEMP_FAHRENHEIT,
 )
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv, entity_platform
@@ -37,7 +37,7 @@ from .const import (
     SERVICE_SET_MUG_NAME,
     SERVICE_SET_TARGET_TEMP,
 )
-from .mug import EmberMug
+from .mug.api import EmberMug
 
 # Schema
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
@@ -63,10 +63,10 @@ SET_MUG_NAME_SCHEMA = {
 }
 
 
-async def async_setup_platform(
+def setup_platform(
     hass: HomeAssistantType,
     config: ConfigType,
-    async_add_entities: Callable,
+    add_entities: Callable,
     discovery_info: Optional[DiscoveryInfoType] = None,
 ) -> None:
     """Add Mug Sensor Entity to HASS."""
@@ -74,21 +74,21 @@ async def async_setup_platform(
 
     _LOGGER.debug("Setup platform")
 
-    async_add_entities([EmberMugSensor(hass, config)])
+    add_entities([EmberMugSensor(hass, config)])
 
     platform = entity_platform.current_platform.get()
-    platform.async_register_entity_service(
+    platform.register_entity_service(
         SERVICE_SET_LED_COLOUR, SET_LED_COLOUR_SCHEMA, set_led_colour
     )
-    platform.async_register_entity_service(
+    platform.register_entity_service(
         SERVICE_SET_TARGET_TEMP, SET_TARGET_TEMP_SCHEMA, set_target_temp
     )
-    platform.async_register_entity_service(
+    platform.register_entity_service(
         SERVICE_SET_MUG_NAME, SET_MUG_NAME_SCHEMA, set_mug_name
     )
 
 
-async def async_setup_entry(hass: HomeAssistantType, config: ConfigType):
+def setup_entry(hass: HomeAssistantType, config: ConfigType):
     """Set up services for Entry."""
     _LOGGER.debug(f"Setup entry {config}")
 
@@ -99,18 +99,14 @@ class EmberMugSensor(Entity):
     def __init__(self, hass: HomeAssistantType, config: ConfigType):
         """Set config and initial values. Also add EmberMug class which tracks changes."""
         super().__init__()
+        self._loop = False
         self.mac_address = config[CONF_MAC]
         self._icon = ICON_DEFAULT
         self._unique_id = f"ember_mug_{format_mac(self.mac_address)}"
         self._name = config.get(CONF_NAME, f"Ember Mug {self.mac_address}")
         self._unit_of_measurement = config.get(CONF_TEMPERATURE_UNIT, TEMP_CELSIUS)
 
-        self.mug = EmberMug(
-            self.mac_address,
-            self._unit_of_measurement != TEMP_FAHRENHEIT,
-            self.async_update_callback,
-            hass,
-        )
+        self.mug = EmberMug(self.mac_address)
         _LOGGER.info(f"Ember Mug {self._name} Setup")
 
     @property
@@ -136,26 +132,7 @@ class EmberMugSensor(Entity):
     @property
     def state_attributes(self) -> Dict[str, Union[str, float]]:
         """Return a list of attributes."""
-        return {
-            ATTR_BATTERY_LEVEL: self.mug.battery,
-            "led_colour": self.mug.colour,
-            "current_temp": self.mug.current_temp,
-            "target_temp": self.mug.target_temp,
-            CONF_TEMPERATURE_UNIT: self.mug.temperature_unit,
-            "latest_push": self.mug.latest_event_id,
-            "serial_number": self.mug.serial_number,
-            "on_charging_base": self.mug.on_charging_base,
-            "liquid_level": self.mug.liquid_level,
-            "liquid_state": self.mug.liquid_state_label,
-            "liquid_state_label": self.mug.liquid_state_label,
-            "date_time_zone": self.mug.date_time_zone,
-            "battery_voltage": self.mug.battery_voltage,
-            "firmware_info": self.mug.firmware_info,
-            "udsk": self.mug.udsk,
-            "dsk": self.mug.dsk,
-            "mug_name": self.mug.mug_name,
-            "mug_id": self.mug.mug_id,
-        }
+        return self.mug.to_dict()
 
     @property
     def unit_of_measurement(self) -> str:
@@ -178,18 +155,38 @@ class EmberMugSensor(Entity):
         return False
 
     @callback
-    def async_update_callback(self) -> None:
-        """Is called in Mug `async_run` to signal change to hass."""
+    def update_callback(self) -> None:
+        """Is called in Mug `run` to signal change to hass."""
         _LOGGER.debug("Update in HASS requested")
-        self.async_schedule_update_ha_state()
+        self.schedule_update_ha_state()
 
-    async def async_added_to_hass(self) -> None:
-        """Stop polling on remove."""
+    def added_to_hass(self) -> None:
+        """Start polling on add."""
         _LOGGER.info(f"Start running {self._name}")
         # Start loop
-        self.hass.async_create_task(self.mug.async_run())
+        self._loop = True
+        while self._loop:
+            try:
+                self.mug.connect()
+                self.mug.subscribe()
+            except BTLEDisconnectError:
+                _LOGGER.warning(
+                    f"Failed to connect to {self.mac_address}. Waiting 30sec"
+                )
+                time.sleep(30)
 
-    async def async_will_remove_from_hass(self) -> None:
+        while self._loop:
+            self.mug.update_all()
+            for _ in range(150):
+                self.mug.wait_for_notifications(2)
+                if self.mug.has_updates:
+                    for attr in self.mug.pop_queued():
+                        self.mug.update_char(attr)
+                    self.schedule_update_ha_state()
+                time.sleep(2)
+
+    def will_remove_from_hass(self) -> None:
         """Stop polling on remove."""
         _LOGGER.info(f"Stop running {self._name}")
-        await self.mug.disconnect()
+        self._loop = False
+        self.mug.disconnect()
