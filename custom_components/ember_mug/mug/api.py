@@ -8,8 +8,9 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from bluepy.btle import (
     ADDR_TYPE_RANDOM,
     UUID,
+    BTLEDisconnectError,
+    BTLEInternalError,
     BTLEManagementError,
-    Characteristic,
     DefaultDelegate,
     Peripheral,
 )
@@ -118,8 +119,8 @@ class EmberMug:
         """Set types and default values of internal attributes."""
         self._mac_address = mac_address
         self._delegate = EmberMugDelegate(1)
-        self._device = Peripheral(None).withDelegate(self._delegate)
-        self._uuid_char_cache: Optional[Dict[str, Characteristic]] = {}
+        self._device = Peripheral(None)
+        self._uuid_handle_cache: Optional[Dict[str, int]] = {}
         self.attr_method_map = {
             "mug_name": (bytes_to_str, UUID_MUG_NAME),
             "mug_id": (parse_mug_id, UUID_MUG_ID),
@@ -179,7 +180,7 @@ class EmberMug:
 
     def connect(self) -> None:
         """Connect to device."""
-        self._device.connect(self._mac_address, addrType=ADDR_TYPE_RANDOM)
+        self._connect()
         self._device.setSecurityLevel(level="high")
         try:
             self._device.pair()
@@ -187,12 +188,34 @@ class EmberMug:
             # 19 is already paired. Ignore.
             if e.estat != 19:
                 raise e
-        self.ensure_characteristics()
+        self._connect()
+
+    def _connect(self) -> bool:
+        """Bare bones connect method."""
+        for i in range(10):
+            try:
+                self._device.connect(self._mac_address, addrType=ADDR_TYPE_RANDOM)
+                return True
+            except BTLEDisconnectError:
+                pass
+        return False
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if connected."""
+        try:
+            return self._device.getState() == "conn"
+        except BTLEDisconnectError:
+            return False
+        except BTLEInternalError as e:
+            if e.emsg == "Helper not started (did you call connect()?)":
+                return False
+            raise e
 
     def subscribe(self) -> None:
         """Enable notifications."""
         self.ensure_characteristics()
-        handle = self._uuid_char_cache[UUID_PUSH_EVENT].getHandle()
+        handle = self.get_handle(UUID_PUSH_EVENT)
         resp = self._device.withDelegate(self._delegate).writeCharacteristic(
             handle, b"\x01\x00", True
         )
@@ -202,22 +225,27 @@ class EmberMug:
         """Disconnect from device."""
         self._device.disconnect()
 
+    def get_handle(self, uuid: str) -> int:
+        """Use handle to connect."""
+        return self._uuid_handle_cache[uuid]
+
     def update_char(self, attr: str) -> None:
         """Fetch attr value from device."""
-        if not self._uuid_char_cache:
-            self.ensure_characteristics()
+        self.ensure_characteristics()
 
         if attr not in self.attr_method_map:
             raise ValueError(f"Unknown attribute {attr}")
 
         parse_method, uuid = self.attr_method_map[attr]
-        new_value = parse_method(self._uuid_char_cache[uuid].read())
+        new_value = self._device.readCharacteristic(self.get_handle(uuid))
         if new_value != getattr(self, attr):
             _LOGGER.info(f"{attr.title()} changed to {new_value}")
             setattr(self, attr, new_value)
 
     def update_all(self) -> None:
         """Update all attributes."""
+        if not self.is_connected:
+            self._connect()
         for attr in self.attr_method_map:
             if attr in self.immutable_attrs and getattr(self, attr) is not None:
                 continue
@@ -225,34 +253,46 @@ class EmberMug:
 
     def ensure_characteristics(self) -> None:
         """Store a mapping of UUIDs and Characteristics to avoid re-fetching them."""
-        if self._uuid_char_cache:
+        if not self.is_connected:
+            self._connect()
+        if self._uuid_handle_cache:
             return
         characteristics = self._device.withDelegate(self._delegate).getCharacteristics()
         uuids: List[UUID] = [v[1] for v in self.attr_method_map.values()]
-        for char in characteristics:
-            if char.uuid in uuids or char.uuid == UUID_PUSH_EVENT:
-                self._uuid_char_cache[str(char.uuid)] = char
+        self._uuid_handle_cache = {
+            str(char.uuid): char.getHandle()
+            for char in characteristics
+            if char.uuid in uuids or char.uuid == UUID_PUSH_EVENT
+        }
 
     def set_led_colour(self, colour: Tuple[int, int, int, int]) -> None:
         """Set a new colour for LED."""
+        if not self.is_connected:
+            self._connect()
         _LOGGER.debug(f"Set LED Colour to {colour}")
         self.ensure_characteristics()
-        self._uuid_char_cache[UUID_LED].write(bytearray(colour))
+        self._device.writeCharacteristic(self.get_handle(UUID_LED), bytearray(colour))
 
     def set_target_temp(self, target_temp: float) -> None:
         """Set new target temp for mug."""
+        if not self.is_connected:
+            self._connect()
         _LOGGER.debug(f"Set target temp to {target_temp}")
         self.ensure_characteristics()
         target = bytearray(int(target_temp / 0.01).to_bytes(2, "little"))
-        self._uuid_char_cache[UUID_TARGET_TEMP].write(target)
+        self._device.writeCharacteristic(self.get_handle(UUID_TARGET_TEMP), target)
 
     def set_mug_name(self, name: str) -> None:
         """Assign new name to mug."""
+        if not self.is_connected:
+            self._connect()
         if not re.match(name, MUG_NAME_REGEX):
             raise ValueError(f'The name "{name}" not not respect requirements.')
         _LOGGER.debug(f"Set target temp to {name}")
         self.ensure_characteristics()
-        self._uuid_char_cache[UUID_MUG_NAME].write(bytearray(name.encode("utf8")))
+        self._device.writeCharacteristic(
+            self.get_handle(UUID_MUG_NAME), bytearray(name.encode("utf8"))
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dict of all the useful attributes."""
