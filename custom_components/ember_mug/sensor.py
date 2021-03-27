@@ -4,7 +4,6 @@ from __future__ import annotations
 import time
 from typing import Callable, Dict, Optional, Union
 
-from bluepy.btle import BTLEDisconnectError
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.const import (
     CONF_MAC,
@@ -13,7 +12,6 @@ from homeassistant.const import (
     DEVICE_CLASS_TEMPERATURE,
     TEMP_CELSIUS,
 )
-from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.device_registry import format_mac
 from homeassistant.helpers.entity import Entity
@@ -122,7 +120,7 @@ class EmberMugSensor(Entity):
     @property
     def available(self) -> bool:
         """Return if this entity is available. This is only sort of reliable since we don't want to set it too often because Bluetooth is unreliable..."""
-        return self.mug.available
+        return True
 
     @property
     def state(self) -> Optional[float]:
@@ -154,22 +152,13 @@ class EmberMugSensor(Entity):
         """Don't use polling. We'll request updates."""
         return False
 
-    @callback
-    def update_callback(self) -> None:
-        """Is called in Mug `run` to signal change to hass."""
-        _LOGGER.debug("Update in HASS requested")
-        self.schedule_update_ha_state()
-
     def added_to_hass(self) -> None:
         """Start polling on add."""
         _LOGGER.info(f"Start running {self._name}")
         # Start loop
         self._loop = True
         while self._loop:
-            try:
-                self.mug.connect()
-                self.mug.subscribe()
-            except BTLEDisconnectError:
+            if not self.mug.connect():
                 _LOGGER.warning(
                     f"Failed to connect to {self.mac_address}. Waiting 30sec"
                 )
@@ -178,11 +167,11 @@ class EmberMugSensor(Entity):
         while self._loop:
             self.mug.update_all()
             for _ in range(150):
-                self.mug.wait_for_notifications(2)
-                if self.mug.has_updates:
-                    for attr in self.mug.pop_queued():
-                        self.mug.update_char(attr)
-                    self.schedule_update_ha_state()
+                # self.mug.wait_for_notifications(2)
+                # if self.mug.has_updates:
+                #     for attr in self.mug.pop_queued():
+                #         self.mug.update_char(attr)
+                #     self.schedule_update_ha_state()
                 time.sleep(2)
 
     def will_remove_from_hass(self) -> None:

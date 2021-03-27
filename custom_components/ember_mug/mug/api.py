@@ -79,7 +79,7 @@ class EmberMug(DefaultDelegate):
         super().__init__()
         """Set types and default values of internal attributes."""
         self._mac_address = mac_address
-        self._device = Peripheral(self._mac_address, addrType=ADDR_TYPE_RANDOM)
+        self._device = Peripheral(None)
         self._uuid_handle_cache: Optional[Dict[str, int]] = {}
         self.latest_event_id: Optional[int] = None
         self._push_event_handle: Optional[int] = None
