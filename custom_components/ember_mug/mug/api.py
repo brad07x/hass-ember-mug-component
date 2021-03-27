@@ -272,7 +272,8 @@ class EmberMug(DefaultDelegate):
     def to_dict(self) -> Dict[str, Any]:
         """Return a dict of all the useful attributes."""
         data = {"liquid_state_label": self.liquid_state_label}
-        for attr, value in self.attr_method_map.items():
+        for attr in self.attr_method_map:
+            value = getattr(self, attr)
             if isinstance(value, dict):
                 data.update(value)
             else:
@@ -284,7 +285,7 @@ class EmberMug(DefaultDelegate):
         self.ensure_characteristics()
         handle = self._uuid_handle_cache[uuid]
         self.connect()
-        for i in range(10):
+        for _ in range(10):
             try:
                 return self._device.readCharacteristic(handle)
             except BTLEDisconnectError:
@@ -299,7 +300,7 @@ class EmberMug(DefaultDelegate):
         """Attempt writing GATT value multiple times."""
         self.ensure_characteristics()
         handle = self._uuid_handle_cache[uuid]
-        for i in range(10):
+        for _ in range(10):
             self.connect()
             try:
                 return self._device.writeCharacteristic(handle, value)
