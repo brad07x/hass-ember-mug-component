@@ -61,10 +61,10 @@ SET_MUG_NAME_SCHEMA = {
 }
 
 
-def setup_platform(
+async def async_setup_platform(
     hass: HomeAssistantType,
     config: ConfigType,
-    add_entities: Callable,
+    async_add_entities: Callable,
     discovery_info: Optional[DiscoveryInfoType] = None,
 ) -> None:
     """Add Mug Sensor Entity to HASS."""
@@ -72,7 +72,7 @@ def setup_platform(
 
     _LOGGER.debug("Setup platform")
 
-    add_entities([EmberMugSensor(hass, config)])
+    async_add_entities([EmberMugSensor(hass, config)])
 
     platform = entity_platform.current_platform.get()
     platform.register_entity_service(
@@ -86,7 +86,7 @@ def setup_platform(
     )
 
 
-def setup_entry(hass: HomeAssistantType, config: ConfigType):
+async def async_setup_entry(hass: HomeAssistantType, config: ConfigType):
     """Set up services for Entry."""
     _LOGGER.debug(f"Setup entry {config}")
 
