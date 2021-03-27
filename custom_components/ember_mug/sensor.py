@@ -75,13 +75,13 @@ async def async_setup_platform(
     async_add_entities([EmberMugSensor(hass, config)])
 
     platform = entity_platform.current_platform.get()
-    platform.register_entity_service(
+    platform.async_register_entity_service(
         SERVICE_SET_LED_COLOUR, SET_LED_COLOUR_SCHEMA, set_led_colour
     )
-    platform.register_entity_service(
+    platform.async_register_entity_service(
         SERVICE_SET_TARGET_TEMP, SET_TARGET_TEMP_SCHEMA, set_target_temp
     )
-    platform.register_entity_service(
+    platform.async_register_entity_service(
         SERVICE_SET_MUG_NAME, SET_MUG_NAME_SCHEMA, set_mug_name
     )
 
