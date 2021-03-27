@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from bluepy.btle import (
@@ -10,7 +11,6 @@ from bluepy.btle import (
     UUID,
     BTLEDisconnectError,
     BTLEInternalError,
-    BTLEManagementError,
     DefaultDelegate,
     Peripheral,
 )
@@ -52,51 +52,10 @@ from .utils import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-__all__ = ("EmberMug", "EmberMugDelegate")
+__all__ = ("EmberMug",)
 
 
-class EmberMugDelegate(DefaultDelegate):
-    """Notification handler and used for caching in bluepy."""
-
-    def __init__(self, push_event_handle: int):
-        """Set up the delegate."""
-        super().__init__()
-        self._push_event_handle = push_event_handle
-        self.latest_event_id: Optional[int] = None
-        self.queued_updates = set()
-
-    def handleNotification(self, handle: int, data: bytes):
-        """Handle all notifications."""
-        _LOGGER.debug(f"Received message for {handle}")
-        if handle == self._push_event_handle:
-            self.handle_push_updates(data)
-        else:
-            _LOGGER.warning(f"Received unknown handle {handle}")
-
-    def handle_push_updates(self, data: bytes):
-        """Push events from the mug to indicate changes."""
-        event_id = data[0]
-        _LOGGER.info(f"Push event received from Mug ({event_id})")
-        self.latest_event_id = event_id
-        # Check known IDs
-        if event_id in PUSH_EVENT_BATTERY_IDS:
-            # All indicate changes in battery/charger connection
-            self.queued_updates.add("battery")
-        elif event_id == PUSH_EVENT_ID_TARGET_TEMPERATURE_CHANGED:
-            self.queued_updates.add("target_temp")
-        elif event_id == PUSH_EVENT_ID_DRINK_TEMPERATURE_CHANGED:
-            self.queued_updates.add("current_temp")
-        elif event_id == PUSH_EVENT_ID_AUTH_INFO_NOT_FOUND:
-            _LOGGER.warning("Auth info missing")
-        elif event_id == PUSH_EVENT_ID_LIQUID_LEVEL_CHANGED:
-            self.queued_updates.add("liquid_level")
-        elif event_id == PUSH_EVENT_ID_LIQUID_STATE_CHANGED:
-            self.queued_updates.add("liquid_state")
-        elif event_id == PUSH_EVENT_ID_BATTERY_VOLTAGE_STATE_CHANGED:
-            self.queued_updates.add("battery_voltage")
-
-
-class EmberMug:
+class EmberMug(DefaultDelegate):
     """Facilitate interaction with Mug and stores information."""
 
     mug_name: Optional[str] = None
@@ -116,11 +75,15 @@ class EmberMug:
     immutable_attrs = ["mug_id", "dsk"]
 
     def __init__(self, mac_address: str) -> None:
+        """Set up the delegate."""
+        super().__init__()
         """Set types and default values of internal attributes."""
         self._mac_address = mac_address
-        self._delegate = EmberMugDelegate(1)
-        self._device = Peripheral(None)
+        self._device = Peripheral(self._mac_address, addrType=ADDR_TYPE_RANDOM)
         self._uuid_handle_cache: Optional[Dict[str, int]] = {}
+        self.latest_event_id: Optional[int] = None
+        self._push_event_handle: Optional[int] = None
+        self.queued_updates = set()
         self.attr_method_map = {
             "mug_name": (bytes_to_str, UUID_MUG_NAME),
             "mug_id": (parse_mug_id, UUID_MUG_ID),
@@ -160,12 +123,12 @@ class EmberMug:
     @property
     def latest_push_id(self) -> Optional[int]:
         """Shortcut to delegate attr."""
-        return self._delegate.latest_event_id
+        return self.latest_event_id
 
     @property
     def has_updates(self) -> bool:
         """Return true if the queue is not empty."""
-        return len(self._delegate.queued_updates) > 1
+        return len(self.queued_updates) > 1
 
     @property
     def wait_for_notifications(self) -> Callable:
@@ -174,27 +137,24 @@ class EmberMug:
 
     def pop_queued(self) -> Set[str]:
         """Empty and return current queue."""
-        queued_updates = self._delegate.queued_updates
-        self._delegate.queued_updates = {}
+        queued_updates = self.queued_updates
+        self.queued_updates = set()
         return queued_updates
 
-    def connect(self) -> None:
-        """Connect to device."""
-        self._connect()
-        self._device.setSecurityLevel(level="high")
-        try:
-            self._device.pair()
-        except BTLEManagementError as e:
-            # 19 is already paired. Ignore.
-            if e.estat != 19:
-                raise e
-        self._connect()
+    def connect(self) -> bool:
+        """Connect to device if not connected."""
+        if self.is_connected:
+            return True
+        return self._connect()
 
     def _connect(self) -> bool:
         """Bare bones connect method."""
-        for i in range(10):
+        for i in range(15):
             try:
+                if not self._device.delegate:
+                    self._device.setDelegate(self)
                 self._device.connect(self._mac_address, addrType=ADDR_TYPE_RANDOM)
+                self._device.setSecurityLevel(level="medium")
                 return True
             except BTLEDisconnectError:
                 pass
@@ -208,16 +168,48 @@ class EmberMug:
         except BTLEDisconnectError:
             return False
         except BTLEInternalError as e:
-            if e.emsg == "Helper not started (did you call connect()?)":
+            if e.message == "Helper not started (did you call connect()?)":
                 return False
             raise e
+
+    def handleNotification(self, handle: int, data: bytes):
+        """Handle all notifications."""
+        _LOGGER.debug(f"Received message for {handle}")
+        if handle == self._push_event_handle:
+            self.handle_push_updates(data)
+        else:
+            _LOGGER.warning(f"Received unknown handle {handle}")
+
+    def handle_push_updates(self, data: bytes):
+        """Push events from the mug to indicate changes."""
+        event_id = data[0]
+        _LOGGER.info(f"Push event received from Mug ({event_id})")
+        self.latest_event_id = event_id
+        # Check known IDs
+        if event_id in PUSH_EVENT_BATTERY_IDS:
+            # All indicate changes in battery/charger connection
+            self.queued_updates.add("battery")
+        elif event_id == PUSH_EVENT_ID_TARGET_TEMPERATURE_CHANGED:
+            self.queued_updates.add("target_temp")
+        elif event_id == PUSH_EVENT_ID_DRINK_TEMPERATURE_CHANGED:
+            self.queued_updates.add("current_temp")
+        elif event_id == PUSH_EVENT_ID_AUTH_INFO_NOT_FOUND:
+            _LOGGER.warning("Auth info missing")
+        elif event_id == PUSH_EVENT_ID_LIQUID_LEVEL_CHANGED:
+            self.queued_updates.add("liquid_level")
+        elif event_id == PUSH_EVENT_ID_LIQUID_STATE_CHANGED:
+            self.queued_updates.add("liquid_state")
+        elif event_id == PUSH_EVENT_ID_BATTERY_VOLTAGE_STATE_CHANGED:
+            self.queued_updates.add("battery_voltage")
 
     def subscribe(self) -> None:
         """Enable notifications."""
         self.ensure_characteristics()
-        handle = self.get_handle(UUID_PUSH_EVENT)
-        resp = self._device.withDelegate(self._delegate).writeCharacteristic(
-            handle, b"\x01\x00", True
+        self._push_event_handle = self.get_handle(UUID_PUSH_EVENT)
+        if not self._device.delegate:
+            self._device.setDelegate(self)
+        resp = self._device.writeCharacteristic(
+            self._push_event_handle + 1, b"\x01\x00", True
         )
         _LOGGER.info(f"Subscribe response: {resp}")
 
@@ -225,27 +217,19 @@ class EmberMug:
         """Disconnect from device."""
         self._device.disconnect()
 
-    def get_handle(self, uuid: str) -> int:
-        """Use handle to connect."""
-        return self._uuid_handle_cache[uuid]
-
     def update_char(self, attr: str) -> None:
         """Fetch attr value from device."""
-        self.ensure_characteristics()
-
         if attr not in self.attr_method_map:
             raise ValueError(f"Unknown attribute {attr}")
 
         parse_method, uuid = self.attr_method_map[attr]
-        new_value = self._device.readCharacteristic(self.get_handle(uuid))
+        new_value = parse_method(self.read_characteristic(uuid))
         if new_value != getattr(self, attr):
             _LOGGER.info(f"{attr.title()} changed to {new_value}")
             setattr(self, attr, new_value)
 
     def update_all(self) -> None:
         """Update all attributes."""
-        if not self.is_connected:
-            self._connect()
         for attr in self.attr_method_map:
             if attr in self.immutable_attrs and getattr(self, attr) is not None:
                 continue
@@ -253,11 +237,10 @@ class EmberMug:
 
     def ensure_characteristics(self) -> None:
         """Store a mapping of UUIDs and Characteristics to avoid re-fetching them."""
-        if not self.is_connected:
-            self._connect()
+        self.connect()
         if self._uuid_handle_cache:
             return
-        characteristics = self._device.withDelegate(self._delegate).getCharacteristics()
+        characteristics = self._device.getCharacteristics()
         uuids: List[UUID] = [v[1] for v in self.attr_method_map.values()]
         self._uuid_handle_cache = {
             str(char.uuid): char.getHandle()
@@ -267,32 +250,24 @@ class EmberMug:
 
     def set_led_colour(self, colour: Tuple[int, int, int, int]) -> None:
         """Set a new colour for LED."""
-        if not self.is_connected:
-            self._connect()
+        self.connect()
         _LOGGER.debug(f"Set LED Colour to {colour}")
-        self.ensure_characteristics()
-        self._device.writeCharacteristic(self.get_handle(UUID_LED), bytearray(colour))
+        self.write_characteristic(UUID_LED, bytearray(colour))
 
     def set_target_temp(self, target_temp: float) -> None:
         """Set new target temp for mug."""
-        if not self.is_connected:
-            self._connect()
+        self.connect()
         _LOGGER.debug(f"Set target temp to {target_temp}")
-        self.ensure_characteristics()
         target = bytearray(int(target_temp / 0.01).to_bytes(2, "little"))
-        self._device.writeCharacteristic(self.get_handle(UUID_TARGET_TEMP), target)
+        self.write_characteristic(UUID_TARGET_TEMP, target)
 
     def set_mug_name(self, name: str) -> None:
         """Assign new name to mug."""
-        if not self.is_connected:
-            self._connect()
+        self.connect()
         if not re.match(name, MUG_NAME_REGEX):
             raise ValueError(f'The name "{name}" not not respect requirements.')
         _LOGGER.debug(f"Set target temp to {name}")
-        self.ensure_characteristics()
-        self._device.writeCharacteristic(
-            self.get_handle(UUID_MUG_NAME), bytearray(name.encode("utf8"))
-        )
+        self.write_characteristic(UUID_MUG_NAME, bytearray(name.encode("utf8")))
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dict of all the useful attributes."""
@@ -303,3 +278,35 @@ class EmberMug:
             else:
                 data[attr] = value
         return data
+
+    def read_characteristic(self, uuid: str) -> bytearray:
+        """Attempt reading GATT value multiple times."""
+        self.ensure_characteristics()
+        handle = self._uuid_handle_cache[uuid]
+        self.connect()
+        for i in range(10):
+            try:
+                return self._device.readCharacteristic(handle)
+            except BTLEDisconnectError:
+                pass
+            except BTLEInternalError as e:
+                if e.message != "Helper not started (did you call connect()?)":
+                    raise e
+            time.sleep(1)
+        raise Exception(f"Timeout trying to read {uuid} after 10 attempts")
+
+    def write_characteristic(self, uuid: str, value: bytearray) -> None:
+        """Attempt writing GATT value multiple times."""
+        self.ensure_characteristics()
+        handle = self._uuid_handle_cache[uuid]
+        for i in range(10):
+            self.connect()
+            try:
+                return self._device.writeCharacteristic(handle, value)
+            except BTLEDisconnectError:
+                pass
+            except BTLEInternalError as e:
+                if e.message != "Helper not started (did you call connect()?)":
+                    raise e
+            time.sleep(1)
+        raise Exception(f"Timeout trying to write to {uuid} after 10 attempts")
