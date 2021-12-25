@@ -1,9 +1,11 @@
-# [Ember Mug Integration for Home Assistant](https://github.com/sopelj/hass-ember-mug-component)
+# FORK - FOR TESTING ONLY
+Forking @sopelj's project to integrate Ember Mugs w/HA. Testing newer version of bleak (0.13.0) and modifying to permit usage of secondary USB HCI interface on rPi.
+# [ORIGINAL PROJECT - Ember Mug Integration for Home Assistant](https://github.com/sopelj/hass-ember-mug-component)
 
 [![GitHub Release](https://img.shields.io/github/release/sopelj/hass-ember-mug-component.svg?style=for-the-badge)](https://github.com/sopelj/hass-ember-mug-component/releases)
 [![License](https://img.shields.io/github/license/sopelj/hass-ember-mug-component.svg?style=for-the-badge)](LICENSE.md)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://github.com/custom-components/hacs)
-![Project Maintenance](https://img.shields.io/maintenance/yes/2021.svg?style=for-the-badge)
+![Project Maintenance](https://img.shields.io/maintenance/no/2021.svg?style=for-the-badge)
 
 Custom integration for the Ember Mug in Home Assistant.
 I only have the Ember Mug 2, but in theory it should be the same with other Ember Mugs.

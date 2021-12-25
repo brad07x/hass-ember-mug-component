@@ -1,10 +1,10 @@
 {
-  "codeowners": ["@sopelj"],
+  "codeowners": ["@brad07x"],
   "config_flow": false,
   "dependencies": [],
-  "documentation": "https://github.com/sopelj/hass_ember_mug",
+  "documentation": "https://github.com/sopelj/brad07x/hass-ember-mug-component",
   "domain": "ember_mug",
   "name": "Ember Mug",
-  "version": "0.1.1",
-  "requirements": ["bleak==0.12.1"]
+  "version": "0.1.2",
+  "requirements": ["bleak==0.13.0"]
 }
